@@ -12,10 +12,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalContext
 import com.example.rfidimproved.ui.theme.RfidImprovedTheme
 import kotlinx.coroutines.*
 import androidx.compose.foundation.Image
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.painterResource
 
 
@@ -41,19 +43,20 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun RfidScannerApp() {
     var scanResult by remember { mutableStateOf("Waiting for RFID scan...") }
-    var webView by remember { mutableStateOf<WebView?>(null) }
-
-    // Create WebView without displaying it
-    DisposableEffect(Unit) {
-        val newWebView = WebView(LocalContext.current).apply {
+    // Create the WebView instance outside of the DisposableEffect
+    val context = LocalContext.current
+    val webView = remember {
+        WebView(context).apply {
             webViewClient = WebViewClient()
             settings.javaScriptEnabled = true
             loadUrl("https://example.com/form") // Replace with your actual form URL
         }
-        webView = newWebView
+    }
 
+    // Use DisposableEffect to manage the WebView's lifecycle
+    DisposableEffect(Unit) {
         onDispose {
-            newWebView.destroy()
+            webView.destroy()
         }
     }
 
@@ -94,15 +97,14 @@ fun RfidScannerApp() {
         Spacer(modifier = Modifier.height(16.dp))
         // Display company logo instead of WebView
         Image(
-            painter = painterResource(id = R.drawable.company_logo), // Make sure to add your logo to the drawable resources
-            contentDescription = "Company Logo",
+            painter = painterResource(id = R.drawable.torvan_medical_logo_db7ea4da),
+            contentDescription = "Torvan Medical Logo",
             modifier = Modifier
                 .size(200.dp)
                 .padding(16.dp)
         )
     }
 }
-
 suspend fun simulateRfidScan(): String {
     delay(2000) // Simulate 2-second scan
     return if (Math.random() < 0.5) "Open RFID" else "Close RFID"
