@@ -2,13 +2,9 @@ package com.example.rfidimproved
 
 import android.annotation.SuppressLint
 import android.widget.Toast
-import android.app.AlarmManager
-import android.app.PendingIntent
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.SharedPreferences
+import android.app.PendingIntent
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
@@ -17,146 +13,95 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import com.example.rfidimproved.ui.theme.RfidImprovedTheme
 import java.util.*
-import kotlin.random.Random
+import java.text.SimpleDateFormat
 
 class MainActivity : ComponentActivity() {
     private var nfcAdapter: NfcAdapter? = null
     private lateinit var webView: WebView
-    private val validRfidTagId = "04A2B76A5A5480" // Replace with your actual RFID tag ID
-    private lateinit var prefs: SharedPreferences
-
-    private var isOpenFormSubmitted: Boolean
-        get() = prefs.getBoolean("isOpenFormSubmitted", false)
-        set(value) = prefs.edit().putBoolean("isOpenFormSubmitted", value).apply()
-
-    private var isCloseFormSubmitted: Boolean
-        get() = prefs.getBoolean("isCloseFormSubmitted", false)
-        set(value) = prefs.edit().putBoolean("isCloseFormSubmitted", value).apply()
-
-    private val submitFormReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (isWeekday()) {
-                val isOpenForm = intent?.getBooleanExtra("isOpenForm", true) ?: true
-                if (isOpenForm) {
-                    submitOpenForm(webView)
-                } else {
-                    submitCloseForm(webView)
-                }
-            }
-        }
-    }
+    private val validRfidTagId = "E8E648A5500104E0"
+    private val scanResultState = mutableStateOf("Waiting for RFID scan...")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-    
-        prefs = getSharedPreferences("RFIDAppPrefs", Context.MODE_PRIVATE)
+
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
-    
+
         webView = WebView(this).apply {
             webViewClient = WebViewClient()
-            // Remove or review the usage of javaScriptEnabled
+            settings.javaScriptEnabled = true
             loadUrl("https://forms.torvanmed.com/torvanmedical/form/OpenCloseLogFP030100/formperma/PiafoxlCxKW3i_pF0aISuWKzGLH0oIvnzD3SkmdLuD4")
         }
-    
-        val submitFormFilter = IntentFilter("com.example.rfidImproved.SUBMIT_FORM")
-        registerReceiver(submitFormReceiver, submitFormFilter, RECEIVER_NOT_EXPORTED)
-    
+
         setContent {
             RfidImprovedTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    RfidScannerApp(nfcAdapter)
+                    RfidScannerApp(
+                        nfcAdapter = nfcAdapter,
+                        scanResult = scanResultState.value,
+                        onUpdateScanResult = { message ->
+                            scanResultState.value = message
+                            showConfirmationMessage(message)
+                        }
+                    )
                 }
             }
         }
-    
-        scheduleAutomaticSubmissions()
-        scheduleDailyReset()
-    }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        unregisterReceiver(submitFormReceiver)
-    }
-
-    private fun scheduleAutomaticSubmissions() {
-        scheduleSubmission(true, 8, 1, 8, 29)
-        scheduleSubmission(false, 17, 0, 18, 0)
-    }
-
-    private fun scheduleSubmission(isOpenForm: Boolean, startHour: Int, startMinute: Int, endHour: Int, endMinute: Int) {
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent("com.example.rfidImproved.SUBMIT_FORM").apply {
-            putExtra("isOpenForm", isOpenForm)
-        }
-        val pendingIntent = PendingIntent.getBroadcast(this, if (isOpenForm) 0 else 1, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    
-        val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, Random.nextInt(startHour, endHour + 1))
-            set(Calendar.MINUTE, Random.nextInt(startMinute, endMinute + 1))
-            set(Calendar.SECOND, 0)
-            
-            // Ensure it's scheduled for a weekday
-            while (!isWeekday(this)) {
-                add(Calendar.DAY_OF_YEAR, 1)
-            }
-    
-            if (before(Calendar.getInstance())) {
-                add(Calendar.DAY_OF_YEAR, 1)
-                while (!isWeekday(this)) {
-                    add(Calendar.DAY_OF_YEAR, 1)
-                }
-            }
-        }
-    
-        if (alarmManager.canScheduleExactAlarms()) {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent)
-        } else {
-            // Fall back to inexact alarm or request permission
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent)
-            // Optionally, you can prompt the user to grant the permission:
-            // startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM))
+        // Set up NFC
+        if (nfcAdapter == null) {
+            showConfirmationMessage("This device doesn't support NFC")
+        } else if (!nfcAdapter!!.isEnabled) {
+            showConfirmationMessage("NFC is disabled. Please enable NFC in your device settings.")
         }
     }
 
-    private fun scheduleDailyReset() {
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(this, DailyResetReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(this, 2, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    override fun onResume() {
+        super.onResume()
+        setupForegroundDispatch()
+    }
 
-        val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            add(Calendar.DAY_OF_YEAR, 1)
+    override fun onPause() {
+        nfcAdapter?.disableForegroundDispatch(this)
+        super.onPause()
+    }
+
+    private fun setupForegroundDispatch() {
+        if (nfcAdapter != null) {
+            val intent = Intent(this, javaClass).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_MUTABLE)
+            val filters = arrayOf<IntentFilter>()
+            val techLists = arrayOf<Array<String>>()
+            nfcAdapter?.enableForegroundDispatch(this, pendingIntent, filters, techLists)
         }
+    }
 
-        alarmManager.setRepeating(
-            AlarmManager.RTC_WAKEUP,
-            calendar.timeInMillis,
-            AlarmManager.INTERVAL_DAY,
-            pendingIntent
-        )
+    private fun showConfirmationMessage(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (NfcAdapter.ACTION_TAG_DISCOVERED == intent.action && isWeekday()) {
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
+        if (NfcAdapter.ACTION_TAG_DISCOVERED == intent.action ||
+            NfcAdapter.ACTION_TECH_DISCOVERED == intent.action ||
+            NfcAdapter.ACTION_NDEF_DISCOVERED == intent.action) {
             val tag = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
             handleScannedTag(tag)
         }
@@ -165,155 +110,229 @@ class MainActivity : ComponentActivity() {
     private fun handleScannedTag(tag: Tag?) {
         val tagId = tag?.id?.joinToString("") { "%02X".format(it) } ?: "Unknown"
         if (tagId == validRfidTagId) {
-            val calendar = Calendar.getInstance()
-            val hourOfDay = calendar.get(Calendar.HOUR_OF_DAY)
-            val minute = calendar.get(Calendar.MINUTE)
+            runOnUiThread {
+                val currentTime = Calendar.getInstance()
+                val formType = when {
+                    isWithinTimeRange(currentTime, 6, 30, 12, 0) -> "Open"
+                    isWithinTimeRange(currentTime, 13, 0, 16, 30) -> "Close"
+                    else -> "Outside"
+                }
     
-            when {
-                hourOfDay in 5..8 && !isOpenFormSubmitted -> {
-                    if (hourOfDay == 8 && minute > 30) return
-                    submitOpenForm(webView)
-                    isOpenFormSubmitted = true
+                when (formType) {
+                    "Open" -> {
+                        scanResultState.value = "Valid RFID tag scanned. Submitting Open form."
+                        showConfirmationMessage(scanResultState.value)
+                        submitOpenForm(webView)
+                    }
+                    "Close" -> {
+                        scanResultState.value = "Valid RFID tag scanned. Submitting Close form."
+                        showConfirmationMessage(scanResultState.value)
+                        submitCloseForm(webView)
+                    }
+                    else -> {
+                        scanResultState.value = "Valid RFID tag scanned, but outside of form submission hours."
+                        showConfirmationMessage(scanResultState.value)
+                    }
                 }
-                hourOfDay in 12..17 && !isCloseFormSubmitted -> {
-                    submitCloseForm(webView)
-                    isCloseFormSubmitted = true
-                }
-                else -> {
-                    showConfirmationMessage("Outside of valid submission windows or already submitted")
-                }
+            }
+        } else {
+            runOnUiThread {
+                scanResultState.value = "Invalid RFID tag: $tagId"
+                showConfirmationMessage(scanResultState.value)
             }
         }
     }
+}
 
-    private fun isWeekday(calendar: Calendar = Calendar.getInstance()): Boolean {
-        val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
-        return dayOfWeek in Calendar.MONDAY..Calendar.FRIDAY
+@Composable
+fun RfidScannerApp(
+    nfcAdapter: NfcAdapter?,
+    scanResult: String,
+    onUpdateScanResult: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(text = scanResult)
+        if (nfcAdapter == null) {
+            Text(text = "NFC is not available on this device")
+        } else if (!nfcAdapter.isEnabled) {
+            Text(text = "NFC is disabled. Please enable it in your device settings.")
+        } else {
+            Text(text = "Ready to scan RFID tags")
+        }
+    }
+}
+        
+    
+
+    private fun isWithinTimeRange(
+        currentTime: Calendar,
+        startHour: Int,
+        startMinute: Int,
+        endHour: Int,
+        endMinute: Int
+    ): Boolean {
+        val start = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, startHour)
+            set(Calendar.MINUTE, startMinute)
+        }
+        val end = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, endHour)
+            set(Calendar.MINUTE, endMinute)
+        }
+        return currentTime.after(start) && currentTime.before(end)
     }
 
     private fun submitOpenForm(webView: WebView) {
         webView.evaluateJavascript("""
-            (function() {
-                // Click the "Open" radio button
-                document.querySelector('#open-radio-button-id').click();
-                
-                // Fill out the text box
-                document.querySelector('#comment-text-box-id').value = 'Opened by RFID Scanner';
-                
-                // Click the submit button
-                document.querySelector('#submit-button-id').click();
-                
-                return true; // Indicate successful submission
-            })()
-        """.trimIndent()) { result ->
+        (function() {
+            return new Promise((resolve, reject) => {
+                if (document.readyState === 'complete') {
+                    submitForm();
+                } else {
+                    window.addEventListener('load', submitForm);
+                }
+    
+                function submitForm() {
+                    // Select the "Open" radio button
+                    const openRadioLabel = document.querySelector('label[for="Radio2_1"]');
+                    const openRadioInput = document.getElementById('Radio2_1');
+                    
+                    // Select the first "Yes" radio button
+                    const yesRadioLabel1 = document.querySelector('label[for="Radio_1"]');
+                    const yesRadioInput1 = document.getElementById('Radio_1');
+                    
+                    // Select the second "Yes" radio button
+                    const yesRadioLabel2 = document.querySelector('label[for="Radio1_1"]');
+                    const yesRadioInput2 = document.getElementById('Radio1_1');
+                    
+                    // Select the text input field
+                    const textBox = document.getElementById('SingleLine-arialabel');
+                    
+                    // Select the submit button
+                    const submitButton = document.querySelector('button.fmSmtButton[elname="submit"]');
+    
+                    if (!openRadioLabel || !openRadioInput || !yesRadioLabel1 || !yesRadioInput1 || 
+                        !yesRadioLabel2 || !yesRadioInput2 || !textBox || !submitButton) {
+                        reject('Required form elements not found');
+                        return;
+                    }
+    
+                    // Click the "Open" radio button
+                    openRadioLabel.click();
+                    
+                    // Click the first "Yes" radio button
+                    yesRadioLabel1.click();
+                    
+                    // Click the second "Yes" radio button
+                    yesRadioLabel2.click();
+                    
+                    // Fill in the text box
+                    textBox.value = 'Sc06';
+                    textBox.dispatchEvent(new Event('input', { bubbles: true }));
+                    textBox.dispatchEvent(new Event('change', { bubbles: true }));
+                    
+                    // Click the submit button
+                    submitButton.click();
+    
+                    // Wait for form submission to complete
+                    setTimeout(() => {
+                        resolve(true);
+                    }, 2000);
+                }
+            });
+        })()
+         """.trimIndent()) { result ->
             if (result == "true") {
-                showConfirmationMessage("Open form submitted successfully")
+                runOnUiThread {
+                    showConfirmationMessage("Open form submitted successfully")
+                }
+            } else {
+                runOnUiThread {
+                    showConfirmationMessage("Error submitting open form")
+                }
             }
         }
     }
-    
-    private fun submitCloseForm(webView: WebView) {
-        webView.evaluateJavascript("""
-            (function() {
-                // Click the "Close" radio button
-                document.querySelector('#close-radio-button-id').click();
-                
-                // Fill out the text box
-                document.querySelector('#comment-text-box-id').value = 'Closed by RFID Scanner';
-                
-                // Click the submit button
-                document.querySelector('#submit-button-id').click();
-                
-                return true; // Indicate successful submission
-            })()
-        """.trimIndent()) { result ->
-            if (result == "true") {
-                showConfirmationMessage("Close form submitted successfully")
-            }
-        }
-    }
-    
-    private fun showConfirmationMessage(message: String) {
+
+private fun submitCloseForm(webView: WebView) {
+    webView.evaluateJavascript(
+        """
+        (function() {
+            return new Promise((resolve, reject) => {
+                if (document.readyState === 'complete') {
+                    submitForm();
+                } else {
+                    window.addEventListener('load', submitForm);
+                }
+
+                function submitForm() {
+                    // Select the "Close" radio button
+                    const closeRadioLabel = document.querySelector('label[for="Radio2_2"]');
+                    const closeRadioInput = document.getElementById('Radio2_2');
+
+                    // Select the first "Yes" radio button
+                    const yesRadioLabel1 = document.querySelector('label[for="Radio_1"]');
+                    const yesRadioInput1 = document.getElementById('Radio_1');
+
+                    // Select the second "Yes" radio button
+                    const yesRadioLabel2 = document.querySelector('label[for="Radio1_1"]');
+                    const yesRadioInput2 = document.getElementById('Radio1_1');
+
+                    // Select the text input field
+                    const textBox = document.getElementById('SingleLine-arialabel');
+
+                    // Select the submit button
+                    const submitButton = document.querySelector('button.fmSmtButton[elname="submit"]');
+
+                    if (!closeRadioLabel || !closeRadioInput || !yesRadioLabel1 || !yesRadioInput1 ||
+                        !yesRadioLabel2 || !yesRadioInput2 || !textBox || !submitButton) {
+                        reject('Required form elements not found');
+                        return;
+                    }
+
+                    // Click the "Close" radio button
+                    closeRadioLabel.click();
+
+                    // Click the first "Yes" radio button
+                    yesRadioLabel1.click();
+
+                    // Click the second "Yes" radio button
+                    yesRadioLabel2.click();
+
+                    // Fill in the text box
+                    textBox.value = 'Sc06';
+                    textBox.dispatchEvent(new Event('input', { bubbles: true }));
+                    textBox.dispatchEvent(new Event('change', { bubbles: true }));
+
+                    // Click the submit button
+                    submitButton.click();
+
+                    // Wait for form submission to complete
+                    setTimeout(() => {
+                        resolve(true);
+                    }, 2000);
+                }
+            });
+        })()
+        """.trimIndent()
+    ) { result ->
         runOnUiThread {
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            when {
+                result == "true" -> showConfirmationMessage("Close form submitted successfully")
+                else -> showConfirmationMessage("Error submitting close form")
+            }
         }
     }
 }
 
-class DailyResetReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        val prefs = context.getSharedPreferences("RFIDAppPrefs", Context.MODE_PRIVATE)
-        prefs.edit().apply {
-            putBoolean("isOpenFormSubmitted", false)
-            putBoolean("isCloseFormSubmitted", false)
-            apply()
-        }
-    }
+private fun runOnUiThread(runnable: () -> Unit) {
+    this.runOnUiThread(runnable)
 }
 
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-fun RfidScannerApp(nfcAdapter: NfcAdapter?) {
-    var scanResult by remember { mutableStateOf("Waiting for RFID scan...") }
-    val context = LocalContext.current
-    val webView = remember {
-        WebView(context).apply {
-            webViewClient = WebViewClient()
-            settings.javaScriptEnabled = true
-            loadUrl("https://forms.torvanmed.com/torvanmedical/form/OpenCloseLogFP030100/formperma/PiafoxlCxKW3i_pF0aISuWKzGLH0oIvnzD3SkmdLuD4") // Replace with your actual form URL
-        }
-    }
-
-    // Use DisposableEffect to manage the WebView's lifecycle
-    DisposableEffect(Unit) {
-        onDispose {
-            webView.destroy()
-        }
-    }
-
-    // Check if NFC is available
-    LaunchedEffect(nfcAdapter) {
-        if (nfcAdapter == null) {
-            scanResult = "NFC is not available on this device"
-        } else if (!nfcAdapter.isEnabled) {
-            scanResult = "NFC is disabled. Please enable NFC in your device settings."
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Open&Close Logs",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = scanResult,
-            style = MaterialTheme.typography.bodyLarge
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        // Static logo
-        StaticLogo()
-    }
+private fun showConfirmationMessage(message: String) {
+    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }
-
-@Composable
-fun StaticLogo() {
-    Box(
-        modifier = Modifier.size(200.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Image(
-            painter = painterResource(id = R.drawable.torvan_medical_logo_db7ea4da),
-            contentDescription = "torvanMedicalLogo",
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize()
-        )
-    }
-}
-
